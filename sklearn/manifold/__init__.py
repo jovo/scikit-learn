@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 from sklearn.manifold._classical_mds import ClassicalMDS
+from sklearn.manifold._graph_spectral_embedding import GraphSpectralEmbedding
 from sklearn.manifold._isomap import Isomap
 from sklearn.manifold._locally_linear import (
     LocallyLinearEmbedding,
@@ -17,6 +18,7 @@ __all__ = [
     "MDS",
     "TSNE",
     "ClassicalMDS",
+    "GraphSpectralEmbedding",
     "Isomap",
     "LocallyLinearEmbedding",
     "SpectralEmbedding",
