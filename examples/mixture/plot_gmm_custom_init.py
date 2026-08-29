@@ -2,22 +2,39 @@
 
 """
 ============================================================
-Custom initialization for GaussianMixture with Ward-Mahalanobis
+Whitening as a preprocessing step for GaussianMixture
 ============================================================
 
-This example illustrates how the EM algorithm for
-:class:`~sklearn.mixture.GaussianMixture` can converge to different local optima
-depending on initialization, and how to provide custom initial parameters.
+The EM algorithm behind :class:`~sklearn.mixture.GaussianMixture` only finds a
+local optimum, so its result depends on where it starts. This example
+constructs a "parallel cigars" dataset, in the spirit of the sparse
+mean-shift clustering simulations of [1]_: the two classes differ only along
+one direction with *small* within-class variance, while every other
+direction has *large* variance and carries no class information at all --
+two elongated point clouds running side by side, separated across their
+short axis. Every built-in initialization (``kmeans``, ``k-means++``,
+``random``, ``random_from_data``) is dominated by the high-variance,
+uninformative direction and essentially never finds the true clusters here --
+restarting them (``n_init``) does not help, because the failure is
+systematic, not due to bad luck on a particular run.
 
-We compare a built-in initialization strategy (k-means++) to a Ward-Mahalanobis
-hierarchical initialization:
+The fix is not a special clustering algorithm: it is **whitening** the data
+first with :class:`~sklearn.decomposition.PCA`'s ``whiten=True`` option, so
+that Euclidean distance in the transformed space matches Mahalanobis distance
+in the original space. Once whitened, an ordinary
+:class:`~sklearn.mixture.GaussianMixture` with its default ``k-means++``
+initialization and a handful of restarts (``n_init=5``, selected internally
+by log-likelihood, no access to the true labels) recovers the true clusters
+reliably.
 
-- Estimate a pooled covariance matrix on the data.
-- Whiten the data so that Euclidean distances in the transformed space
-  correspond to Mahalanobis distances in the original space.
-- Run Ward clustering on the whitened data and cut it to obtain cluster labels.
-- Turn those clusters into ``weights_init``, ``means_init``, and
-  ``precisions_init`` for :class:`~sklearn.mixture.GaussianMixture`.
+**Takeaway:** across 10 random seeds, every built-in initialization run
+directly on the raw data has a median ARI indistinguishable from 0 -- it
+never finds the true clusters -- while the same initialization run on
+PCA-whitened data gets ARI close to 1 on nearly every seed.
+
+.. [1] Witten, D.M. and Tibshirani, R. (2010). "A Framework for Feature
+   Selection in Clustering". Journal of the American Statistical
+   Association, 105(490), 713-726.
 """
 
 # Authors: The scikit-learn developers
@@ -32,124 +49,96 @@ import numpy as np
 from matplotlib.patches import Ellipse
 from scipy import linalg
 
-from sklearn.cluster import AgglomerativeClustering
+from sklearn.decomposition import PCA
 from sklearn.metrics import adjusted_rand_score
 from sklearn.mixture import GaussianMixture
 
 # %%
-# Generate a dataset where Mahalanobis-aware initialization helps
-# --------------------------------------------------------------
+# Step 1: the "parallel cigars" dataset
+# ---------------------------------------
 #
-# We build two spherical Gaussians in a latent space, separated along one axis,
-# and apply a strong linear transform so that separation happens mostly along a
-# low-variance direction in the observed space.
+# Exactly one direction carries the class separation, with small within-class
+# variance; the other direction is pure noise with large variance and no
+# separation at all. Euclidean distance, dominated by the high-variance
+# direction, cannot tell the classes apart; Mahalanobis distance, which
+# accounts for the covariance, can.
 
 
-def make_low_variance_separation(
+def make_parallel_cigars(
+    d=2,
     n_samples=400,
     sep=4.0,
+    compress=0.1,
+    stretch=8.0,
     random_state=0,
 ):
-    """Two spherical clusters separated along y, then strongly transformed."""
+    """One informative, low-variance dimension; ``d - 1`` noisy, high-variance ones."""
     rng = np.random.RandomState(random_state)
     n1 = n_samples // 2
     n2 = n_samples - n1
 
-    y1 = rng.randn(n1, 2) + np.array([0.0, -sep / 2.0])
-    y2 = rng.randn(n2, 2) + np.array([0.0, sep / 2.0])
-    Y = np.vstack([y1, y2])
+    informative = np.concatenate([rng.randn(n1) - sep / 2.0, rng.randn(n2) + sep / 2.0])
     y_true = np.array([0] * n1 + [1] * n2)
 
-    # Strong anisotropy + correlation in observed space.
-    A = np.array([[8.0, 2.0], [0.0, 0.08]])
-    X = Y @ A.T
+    X = np.empty((n_samples, d))
+    X[:, 0] = informative * compress
+    X[:, 1:] = rng.randn(n_samples, d - 1) * stretch
 
     return X, y_true
 
 
-X, y_true = make_low_variance_separation(n_samples=400, sep=4.0, random_state=0)
+X, y_true = make_parallel_cigars(d=2, n_samples=400, random_state=0)
 
 
 # %%
-# Whitening and Ward-Mahalanobis initialization
-# --------------------------------------------
+# Whitening with PCA
+# --------------------
+#
+# The two plots below make the problem visible. In the observed space (left),
+# the classes are cleanly separated, but only along the axis with the
+# *least* spread; the axis with the *most* spread carries no information about
+# class membership at all. A method that judges distance by raw variance, like
+# Euclidean k-means, is dominated by that uninformative high-variance axis. In
+# the whitened space (right), both axes are rescaled to unit variance, so the
+# separation lines up with a direction ordinary Euclidean distance can use.
+#
+# ``PCA(whiten=True)`` does this rescaling in one call: it rotates onto the
+# principal axes and divides each one by its standard deviation, so the
+# output has (approximately) identity covariance.
+
+X_white = PCA(n_components=2, whiten=True).fit_transform(X)
+
+# PCA orders its output columns by explained variance in the *original* data,
+# descending -- here that puts the high-variance nuisance direction first and
+# the low-variance informative direction second, the reverse of X's column
+# order. Reorder (and, if needed, flip the sign of) each whitened column so
+# it lines up with the raw column it most resembles; otherwise the shared
+# axis limits below would pair each raw column with the wrong whitened one.
+corr = np.corrcoef(X.T, X_white.T)[:2, 2:]
+column_order = np.argmax(np.abs(corr), axis=1)
+signs = np.sign(corr[np.arange(2), column_order])
+X_white = X_white[:, column_order] * signs
 
 
-def whiten_with_pooled_covariance(X, reg_covar=1e-6):
-    """Whiten centered X using the pooled covariance (Cholesky-based)."""
-    X = np.asarray(X)
-    X_mean = X.mean(axis=0)
-    Xc = X - X_mean
-    n_features = X.shape[1]
+# Both panels share the exact same axis limits, computed from whichever of
+# the two datasets is more spread out (the observed one). Plotting the
+# whitened data on the *same* scale as the observed data -- rather than
+# letting it fill its own panel -- is what makes the compression from
+# whitening visible: the whitened cluster collapses to a small region in the
+# middle of the same box that the observed data fills edge to edge.
+combined = np.vstack([X, X_white])
+axis_min = combined.min(axis=0)
+axis_max = combined.max(axis=0)
+pad = (axis_max - axis_min) * 0.08
+xlim = (axis_min[0] - pad[0], axis_max[0] + pad[0])
+ylim = (axis_min[1] - pad[1], axis_max[1] + pad[1])
 
-    cov = np.cov(Xc, rowvar=False)
-    cov = np.atleast_2d(cov)
-    cov.flat[:: n_features + 1] += reg_covar
-
-    L = linalg.cholesky(cov, lower=True)  # cov = L L^T
-    X_white = linalg.solve_triangular(L, Xc.T, lower=True).T
-
-    return X_white
-
-
-def mahalanobis_ward_initialization(
-    X,
-    n_components,
-    reg_covar=1e-6,
-):
-    """Ward clustering in whitened space -> (weights, means, precisions)."""
-    X = np.asarray(X)
-    n_samples, n_features = X.shape
-
-    X_white = whiten_with_pooled_covariance(X, reg_covar=reg_covar)
-    labels = AgglomerativeClustering(
-        n_clusters=n_components,
-        linkage="ward",
-    ).fit_predict(X_white)
-
-    weights = np.bincount(labels, minlength=n_components).astype(float)
-    weights /= float(n_samples)
-
-    means = np.zeros((n_components, n_features), dtype=float)
-    covariances = np.zeros((n_components, n_features, n_features), dtype=float)
-
-    x_mean = X.mean(axis=0)
-    Xc = X - x_mean
-    global_cov = np.cov(Xc, rowvar=False)
-    global_cov = np.atleast_2d(global_cov)
-    global_cov.flat[:: n_features + 1] += reg_covar
-
-    for k in range(n_components):
-        Xk = X[labels == k]
-        if Xk.shape[0] <= 1:
-            means[k] = x_mean if Xk.shape[0] == 0 else Xk[0]
-            Ck = global_cov
-        else:
-            means[k] = Xk.mean(axis=0)
-            Ck = np.cov(Xk, rowvar=False)
-            Ck = np.atleast_2d(Ck)
-            Ck.flat[:: n_features + 1] += reg_covar
-        covariances[k] = Ck
-
-    precisions_init = np.empty_like(covariances)
-    for k in range(n_components):
-        precisions_init[k] = linalg.pinvh(covariances[k])
-
-    return weights, means, precisions_init
-
-
-# %%
-# Visualize geometry: observed vs whitened
-# ---------------------------------------
-
-X_white = whiten_with_pooled_covariance(X, reg_covar=1e-6)
-
-fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=False)
+fig, axes = plt.subplots(1, 2, figsize=(9, 4.5), sharex=True, sharey=True)
 
 for label, color in zip([0, 1], plt.cm.tab10([0, 1])):
     mask = y_true == label
     axes[0].scatter(X[mask, 0], X[mask, 1], s=3, color=color, label=f"Class {label}")
-axes[0].set_title("Observed space (colored by true labels)")
+axes[0].set_title("Observed: separation is along the\nlow-variance axis")
 axes[0].set_xlabel("Feature 1")
 axes[0].set_ylabel("Feature 2")
 axes[0].legend(loc="best", markerscale=3, frameon=False)
@@ -157,29 +146,32 @@ axes[0].legend(loc="best", markerscale=3, frameon=False)
 for label, color in zip([0, 1], plt.cm.tab10([0, 1])):
     mask = y_true == label
     axes[1].scatter(X_white[mask, 0], X_white[mask, 1], s=3, color=color)
-axes[1].set_title("Whitened space (Ward-Mahalanobis)")
+axes[1].set_title("Whitened: the same clusters\nseparate cleanly")
 axes[1].set_xlabel("Whitened feature 1")
 axes[1].set_ylabel("Whitened feature 2")
-axes[1].set_aspect("equal", adjustable="box")
+
+axes[0].set_xlim(xlim)
+axes[0].set_ylim(ylim)
+axes[1].set_xlim(xlim)
+axes[1].set_ylim(ylim)
 
 fig.tight_layout()
 plt.show()
 
 
 # %%
-# Precompute custom init once
-# ---------------------------
-
-weights_init, means_init, precisions_init = mahalanobis_ward_initialization(
-    X,
-    n_components=2,
-    reg_covar=1e-6,
-)
-
-
-# %%
-# Compare initialization strategies (ARI across seeds)
-# ---------------------------------------------------
+# Step 2: benchmark against every built-in initialization
+# ---------------------------------------------------------
+#
+# We fit :class:`~sklearn.mixture.GaussianMixture` with each built-in
+# ``init_params`` option across 10 random seeds, and score each fit against
+# the true labels with the adjusted Rand index (ARI, 1.0 = perfect recovery,
+# 0.0 = chance). Alongside these raw-data fits, we add one more column: the
+# same ``k-means++`` initialization, with 5 restarts, run on the
+# *whitened* data instead. sklearn already knows how to pick the best of
+# several restarts without needing the true labels -- it keeps whichever one
+# reaches the highest final log-likelihood -- so this column needs no new
+# machinery, just a change of input.
 
 seeds = range(10)
 methods = [
@@ -188,35 +180,21 @@ methods = [
     ("kmeans", {"init_params": "kmeans", "n_init": 1}),
     ("k-means++", {"init_params": "k-means++", "n_init": 1}),
     ("random_from_data", {"init_params": "random_from_data", "n_init": 1}),
-    ("Ward-Mahalanobis (custom)", None),
 ]
 method_names = [name for name, _ in methods]
 
 rows = []
 for seed in seeds:
     for name, params in methods:
-        if params is None:
-            # Passing explicit init parameters makes EM deterministic here.
-            gmm = GaussianMixture(
-                n_components=2,
-                covariance_type="full",
-                reg_covar=1e-6,
-                weights_init=weights_init,
-                means_init=means_init,
-                precisions_init=precisions_init,
-            )
-        else:
-            gmm = GaussianMixture(
-                n_components=2,
-                covariance_type="full",
-                reg_covar=1e-6,
-                random_state=seed,
-                **params,
-            )
-
+        gmm = GaussianMixture(
+            n_components=2,
+            covariance_type="full",
+            reg_covar=1e-6,
+            random_state=seed,
+            **params,
+        )
         gmm.fit(X)
         labels = gmm.predict(X)
-
         rows.append(
             {
                 "Initialization": name,
@@ -225,24 +203,50 @@ for seed in seeds:
             }
         )
 
+    gmm_whitened = GaussianMixture(
+        n_components=2,
+        covariance_type="full",
+        reg_covar=1e-6,
+        init_params="k-means++",
+        n_init=5,
+        random_state=seed,
+    ).fit(X_white)
+    rows.append(
+        {
+            "Initialization": "whitened + k-means++",
+            "Seed": seed,
+            "ARI": adjusted_rand_score(y_true, gmm_whitened.predict(X_white)),
+        }
+    )
+
+method_names.append("whitened + k-means++")
+
 # Convert to a dict-of-lists for simple plotting without pandas.
 results_by_method = {name: [] for name in method_names}
 for row in rows:
     results_by_method[row["Initialization"]].append(row["ARI"])
 
-# Matplotlib jitter plot to show all points (and the median).
+print("Median ARI by initialization (10 seeds):")
+for name in method_names:
+    ari = np.asarray(results_by_method[name])
+    print(
+        f"  {name:<24s} median={np.median(ari):.2f}  "
+        f"min={ari.min():.2f}  max={ari.max():.2f}"
+    )
+
+# Matplotlib jitter plot to show all points and their median.
 rng = np.random.RandomState(0)
-fig, ax = plt.subplots(figsize=(10, 3.4))
+fig, ax = plt.subplots(figsize=(9, 3.6))
 
 for i, name in enumerate(method_names):
     y = np.asarray(results_by_method[name])
     x = i + 0.15 * (rng.rand(y.size) - 0.5)  # small horizontal jitter
-    ax.scatter(x, y, s=25, alpha=0.8)
-
+    color = "tab:orange" if name == "whitened + k-means++" else "tab:blue"
+    ax.scatter(x, y, s=25, color=color)
     med = float(np.median(y))
-    ax.plot([i - 0.22, i + 0.22], [med, med], linewidth=3)
+    ax.plot([i - 0.22, i + 0.22], [med, med], linewidth=3, color=color)
 
-ax.set_title("Clustering quality across seeds (ARI)")
+ax.set_title("Whitening -- not a special clustering algorithm -- is what fixes this")
 ax.set_ylabel("Adjusted Rand Index")
 ax.set_ylim(-0.05, 1.05)
 ax.set_xticks(range(len(method_names)))
@@ -252,21 +256,19 @@ plt.show()
 
 
 # %%
-# Visualize a difficult run
-# -------------------------
+# Step 3: look at a specific failure case
+# -----------------------------------------
 #
-# We pick the seed giving the worst ARI for k-means++ and compare against the
-# Ward-Mahalanobis custom initialization.
-#
-# The plotting style below mirrors the ellipse visualization used in
-# ``plot_gmm_selection.py`` (adapted here for the fixed ``covariance_type="full"``
-# setting).
+# The jitter plot in Step 2 shows *that* built-in initializations fail on the
+# raw data; this section shows *what that failure looks like*. We take the
+# worst-ARI seed for k-means++ on raw data and compare it against
+# whitened + k-means++ on the same seed.
 
 
 def plot_gmm(ax, gmm, X, title):
     """Plot points colored by the GMM prediction and draw covariance ellipses."""
     Y = gmm.predict(X)
-    colors = plt.cm.tab10(np.linspace(0, 1, gmm.n_components))[::-1]
+    colors = plt.cm.tab10([0, 1])
 
     for i, (mean, color) in enumerate(zip(gmm.means_, colors)):
         if not np.any(Y == i):
@@ -291,7 +293,6 @@ def plot_gmm(ax, gmm, X, title):
     ax.set_aspect("auto")
 
 
-# Find worst seed for k-means++ (using the rows list computed above).
 kpp_aris = [(r["Seed"], r["ARI"]) for r in rows if r["Initialization"] == "k-means++"]
 worst_seed = min(kpp_aris, key=lambda t: t[1])[0]
 
@@ -305,30 +306,52 @@ gmm_kpp = GaussianMixture(
 ).fit(X)
 ari_kpp = adjusted_rand_score(y_true, gmm_kpp.predict(X))
 
-gmm_ward = GaussianMixture(
+gmm_whitened_worst = GaussianMixture(
     n_components=2,
     covariance_type="full",
     reg_covar=1e-6,
-    weights_init=weights_init,
-    means_init=means_init,
-    precisions_init=precisions_init,
-).fit(X)
-ari_ward = adjusted_rand_score(y_true, gmm_ward.predict(X))
+    init_params="k-means++",
+    n_init=5,
+    random_state=worst_seed,
+).fit(X_white)
+ari_whitened = adjusted_rand_score(y_true, gmm_whitened_worst.predict(X_white))
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
+# Each panel is plotted in its own natural space -- raw for the left panel,
+# whitened for the right -- rather than forcing both onto one shared frame.
+# The fitted means_ and covariances_ live in whichever space the model was
+# fit on, so drawing them anywhere else would need an extra inverse-transform
+# just for this plot; showing each fit in its own space avoids that and
+# matches the observed-vs-whitened contrast already used in Step 1.
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
 plot_gmm(
     axes[0],
     gmm_kpp,
     X,
-    title=f"GaussianMixture\n(k-means++, 1 start)\n(ARI={ari_kpp:.2f})",
+    title=f"k-means++ on raw data\n(worst seed, ARI={ari_kpp:.2f})",
 )
 plot_gmm(
     axes[1],
-    gmm_ward,
-    X,
-    title=f"GaussianMixture\n(Ward-Mahalanobis init)\n(ARI = {ari_ward:.2f})",
+    gmm_whitened_worst,
+    X_white,
+    title=f"k-means++ on whitened data\n(same seed, ARI={ari_whitened:.2f})",
 )
+axes[1].set_xlabel("Whitened feature 1")
+axes[1].set_ylabel("Whitened feature 2")
 
 fig.tight_layout()
 plt.show()
+
+# %%
+# Conclusion
+# ----------
+#
+# When class separation is confined to a single low-variance direction and
+# every other direction is pure, high-variance noise, Euclidean-distance-based
+# initializations for :class:`~sklearn.mixture.GaussianMixture` do not merely
+# underperform on the raw data -- they never find the true clusters, with or
+# without extra ``n_init`` restarts, because the failure is systematic rather
+# than a matter of an unlucky random start. Whitening the data first with
+# :class:`~sklearn.decomposition.PCA`'s ``whiten=True`` option removes that
+# systematic bias: no custom clustering code is needed, just a change of
+# input to the same built-in initializations.
