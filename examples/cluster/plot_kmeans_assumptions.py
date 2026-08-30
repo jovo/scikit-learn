@@ -214,6 +214,8 @@ fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharex=True, s
 
 ax1.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_raw)
 ax1.set_title(f"GaussianMixture\n(ARI={ari_raw:.2f} against ground truth)")
+ax1.set_xlim(-6, 6)
+ax1.set_ylim(-6, 6)
 
 ax2.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_white)
 ax2.set_title(f"Pipeline(PCA(whiten=True), GaussianMixture)\n(ARI={ari_white:.2f} against ground truth)")
