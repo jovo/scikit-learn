@@ -615,6 +615,22 @@ class GaussianMixture(BaseMixture):
             `init_params` now accepts 'random_from_data' and 'k-means++' as
             initialization methods.
 
+    whiten_init : bool, default=False
+        Whether to whiten the data with :class:`~sklearn.decomposition.PCA`
+        before applying the distance-based `init_params` methods ('kmeans',
+        'k-means++'). Whitening only changes which samples are grouped
+        together to build the initial responsibilities; the EM fit itself,
+        and every subsequent score (`bic`, `aic`, `score`, ...), continues
+        to run on the data as given. Has no effect when `init_params` is
+        'random' or 'random_from_data', since neither uses distances.
+
+        This can help when the true clusters are anisotropic enough that
+        Euclidean distance on the raw data is dominated by a high-variance,
+        uninformative direction, which can otherwise give EM a starting
+        partition it cannot recover from.
+
+        .. versionadded:: 1.10
+
     weights_init : array-like of shape (n_components, ), default=None
         The user-provided initial weights.
         If it is None, weights are initialized using the `init_params` method.
@@ -776,6 +792,7 @@ class GaussianMixture(BaseMixture):
         max_iter=100,
         n_init=1,
         init_params="kmeans",
+        whiten_init=False,
         weights_init=None,
         means_init=None,
         precisions_init=None,
@@ -791,6 +808,7 @@ class GaussianMixture(BaseMixture):
             max_iter=max_iter,
             n_init=n_init,
             init_params=init_params,
+            whiten_init=whiten_init,
             random_state=random_state,
             warm_start=warm_start,
             verbose=verbose,
