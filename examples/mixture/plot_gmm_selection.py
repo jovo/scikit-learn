@@ -183,11 +183,11 @@ plt.show()
 # reasonably separated relative to their own spread. We now repeat the same
 # exercise on data where that is not true: the two classes differ only along
 # a direction with *small* within-class variance, while every other direction
-# is pure noise with *large* variance. Whitening is used only to *initialize*
-# each model -- :class:`~sklearn.cluster.KMeans` is run on whitened data purely to get a
-# cluster assignment, from which starting weights and means are computed on
-# the original, unwhitened data -- and every model, whitened-init or not, is
-# then fit and scored by BIC entirely on the original data.
+# is pure noise with *large* variance. :class:`~sklearn.mixture.GaussianMixture`'s
+# ``whiten_init`` parameter is used to *initialize* each model -- it whitens
+# the data purely to get a starting cluster assignment -- and every model,
+# whitened-init or not, is then fit and scored by BIC entirely on the
+# original data.
 #
 # Data generation
 # ~~~~~~~~~~~~~~~~
@@ -230,56 +230,14 @@ plt.show()
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
 # As before, we vary the number of components and the type of covariance. We
-# add one more dimension to the grid: whether the initialization comes from
-# k-means on whitened data (via :class:`~sklearn.decomposition.PCA`'s
-# ``whiten=True``) or from :class:`~sklearn.mixture.GaussianMixture`'s own
-# default ``"kmeans"`` initialization on the raw data. To fold this into
-# :class:`~sklearn.model_selection.GridSearchCV` as an ordinary hyperparameter,
-# we wrap it in a small estimator: whitening only ever chooses the starting
-# cluster assignment, the EM fit itself -- and every score, including
-# ``bic`` -- always runs on the data as given, so whitened and non-whitened
-# candidates stay directly comparable.
+# add one more dimension to the grid: :class:`~sklearn.mixture.GaussianMixture`'s
+# ``whiten_init`` parameter, which whitens the data before clustering it to
+# build the initial partition, but always fits EM -- and scores ``bic`` --
+# on the data as given. Because it is an ordinary constructor parameter, it
+# is just another key in ``param_grid``, alongside ``n_components`` and
+# ``covariance_type``.
 
 from matplotlib.lines import Line2D
-
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
-
-
-class WhitenInitGaussianMixture(GaussianMixture):
-    """GaussianMixture, optionally initialized from k-means on whitened data."""
-
-    def __init__(self, whiten_init=False, **kwargs):
-        self.whiten_init = whiten_init
-        super().__init__(**kwargs)
-
-    @classmethod
-    def _get_param_names(cls):
-        # So GridSearchCV can also set whiten_init, alongside every
-        # GaussianMixture parameter it already knows about.
-        return sorted(GaussianMixture._get_param_names() + ["whiten_init"])
-
-    def fit(self, X, y=None):
-        if self.whiten_init:
-            X_white = PCA(n_components=X.shape[1], whiten=True).fit_transform(X)
-            labels = KMeans(
-                n_clusters=self.n_components,
-                n_init=10,
-                random_state=self.random_state,
-            ).fit_predict(X_white)
-            n = X.shape[0]
-            self.weights_init = (
-                np.bincount(labels, minlength=self.n_components).astype(float) / n
-            )
-            self.means_init = np.array(
-                [
-                    X[labels == k].mean(axis=0) if np.any(labels == k) else X.mean(0)
-                    for k in range(self.n_components)
-                ]
-            )
-            self.n_init = 1
-        return super().fit(X, y)
-
 
 param_grid_cigars = {
     "n_components": range(1, 7),
@@ -291,7 +249,7 @@ param_grid_cigars = {
 # fold that trains and scores on the full dataset.
 full_data_cv = [(np.arange(len(X_cigars)),) * 2]
 grid_search_cigars = GridSearchCV(
-    WhitenInitGaussianMixture(random_state=cigars_random_state),
+    GaussianMixture(random_state=cigars_random_state),
     param_grid=param_grid_cigars,
     scoring=gmm_bic_score,
     cv=full_data_cv,
@@ -425,8 +383,8 @@ plt.show()
 #
 # As before, we plot an ellipse for each component of the selected model, in
 # the (raw) data space every candidate was actually fit and scored on. The
-# best estimator here is our ``WhitenInitGaussianMixture``, already refit on
-# the full data by :class:`~sklearn.model_selection.GridSearchCV`.
+# best estimator here is a :class:`~sklearn.mixture.GaussianMixture`, already
+# refit on the full data by :class:`~sklearn.model_selection.GridSearchCV`.
 
 best_gmm_cigars = grid_search_cigars.best_estimator_
 

@@ -194,20 +194,15 @@ ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
 
 # %%
 # The fix is not a different clustering algorithm: it is whitening the data
-# first, with :class:`~sklearn.decomposition.PCA`'s ``whiten=True`` option,
-# composed with :class:`~sklearn.pipeline.Pipeline`. Whitening rescales onto
-# the principal axes so that every direction has unit variance, which is
-# exactly what makes the informative direction visible to a k-means-style
-# initialization again.
+# before clustering it, via :class:`~sklearn.mixture.GaussianMixture`'s
+# ``whiten_init`` parameter. Whitening rescales onto the principal axes so
+# that every direction has unit variance, which is exactly what makes the
+# informative direction visible to a k-means-style initialization again; the
+# EM fit itself still runs on the data as given.
 
-from sklearn.decomposition import PCA
-from sklearn.pipeline import make_pipeline
-
-whitened_gmm = make_pipeline(
-    PCA(n_components=2, whiten=True),
-    GaussianMixture(n_components=2, random_state=random_state),
-)
-y_pred_white = whitened_gmm.fit_predict(X_cigars)
+y_pred_white = GaussianMixture(
+    n_components=2, whiten_init=True, random_state=random_state
+).fit_predict(X_cigars)
 ari_white = adjusted_rand_score(y_cigars, y_pred_white)
 
 fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
@@ -218,7 +213,7 @@ ax1.set_xlim(-6, 6)
 ax1.set_ylim(-6, 6)
 
 ax2.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_white)
-ax2.set_title(f"Pipeline(PCA(whiten=True), GaussianMixture)\n(ARI={ari_white:.2f} against ground truth)")
+ax2.set_title(f"GaussianMixture(whiten_init=True)\n(ARI={ari_white:.2f} against ground truth)")
 
 plt.suptitle("Parallel cigars").set_y(0.98)
 plt.show()
