@@ -26,6 +26,8 @@ candidates. Unlike Bayesian procedures, such inferences are prior-free.
 # One component is kept spherical yet shifted and re-scaled. The other one is
 # deformed to have a more general covariance matrix.
 
+import itertools
+
 import numpy as np
 
 n_samples = 500
@@ -277,25 +279,22 @@ def fit_gmm_cigars(X, n_components, covariance_type, whiten_init, random_state):
 
 n_components_range_cigars = range(1, 7)
 cov_types_cigars = ["tied", "diag", "full"]
+param_grid_cigars = itertools.product(
+    [False, True], n_components_range_cigars, cov_types_cigars
+)
 results_cigars = []
-for whiten_init in [False, True]:
-    for n_components in n_components_range_cigars:
-        for covariance_type in cov_types_cigars:
-            gmm = fit_gmm_cigars(
-                X_cigars,
-                n_components,
-                covariance_type,
-                whiten_init,
-                cigars_random_state,
-            )
-            results_cigars.append(
-                {
-                    "Number of components": n_components,
-                    "Type of covariance": covariance_type,
-                    "Whitened": "Yes" if whiten_init else "No",
-                    "BIC score": gmm.bic(X_cigars),
-                }
-            )
+for whiten_init, n_components, covariance_type in param_grid_cigars:
+    gmm = fit_gmm_cigars(
+        X_cigars, n_components, covariance_type, whiten_init, cigars_random_state
+    )
+    results_cigars.append(
+        {
+            "Number of components": n_components,
+            "Type of covariance": covariance_type,
+            "Whitened": "Yes" if whiten_init else "No",
+            "BIC score": gmm.bic(X_cigars),
+        }
+    )
 
 # %%
 # Plot the BIC scores
