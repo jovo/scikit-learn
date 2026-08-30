@@ -182,21 +182,15 @@ plt.show()
 
 from sklearn.metrics import adjusted_rand_score
 
-X_latent, y_cigars = make_blobs(
+X_cigars, y_cigars = make_blobs(
     n_samples=n_samples, centers=[[-2, 0], [2, 0]], random_state=random_state
 )
-cigars_transformation = [[0.5, 0], [0, 2]]
-X_cigars = np.dot(X_latent, cigars_transformation)
+X_cigars = X_cigars @ [[0.5, 0], [0, 2]]
 
-y_pred = GaussianMixture(n_components=2, random_state=random_state).fit_predict(X_cigars)
-ari = adjusted_rand_score(y_cigars, y_pred)
-
-axis_limits = (-6, 6)
-plt.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred)
-plt.title(f"GaussianMixture on parallel cigars\n(ARI={ari:.2f} against ground truth)")
-plt.xlim(axis_limits)
-plt.ylim(axis_limits)
-plt.show()
+y_pred_raw = GaussianMixture(n_components=2, random_state=random_state).fit_predict(
+    X_cigars
+)
+ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
 
 # %%
 # The fix is not a different clustering algorithm: it is whitening the data
@@ -213,13 +207,18 @@ whitened_gmm = make_pipeline(
     PCA(n_components=2, whiten=True),
     GaussianMixture(n_components=2, random_state=random_state),
 )
-y_pred = whitened_gmm.fit_predict(X_cigars)
-ari = adjusted_rand_score(y_cigars, y_pred)
+y_pred_white = whitened_gmm.fit_predict(X_cigars)
+ari_white = adjusted_rand_score(y_cigars, y_pred_white)
 
-plt.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred)
-plt.title(f"Pipeline(PCA(whiten=True), GaussianMixture)\n(ARI={ari:.2f} against ground truth)")
-plt.xlim(axis_limits)
-plt.ylim(axis_limits)
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
+
+ax1.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_raw)
+ax1.set_title(f"GaussianMixture\n(ARI={ari_raw:.2f} against ground truth)")
+
+ax2.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_white)
+ax2.set_title(f"Pipeline(PCA(whiten=True), GaussianMixture)\n(ARI={ari_white:.2f} against ground truth)")
+
+plt.suptitle("Parallel cigars").set_y(0.98)
 plt.show()
 
 # %%
