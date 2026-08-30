@@ -14,6 +14,7 @@ import numpy as np
 from sklearn import cluster
 from sklearn.base import BaseEstimator, DensityMixin, _fit_context
 from sklearn.cluster import kmeans_plusplus
+from sklearn.decomposition import PCA
 from sklearn.exceptions import ConvergenceWarning
 from sklearn.utils import check_random_state
 from sklearn.utils._array_api import (
@@ -62,6 +63,7 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):
         "init_params": [
             StrOptions({"kmeans", "random", "random_from_data", "k-means++"})
         ],
+        "whiten_init": ["boolean"],
         "random_state": ["random_state"],
         "warm_start": ["boolean"],
         "verbose": ["verbose"],
@@ -80,6 +82,7 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):
         warm_start,
         verbose,
         verbose_interval,
+        whiten_init=False,
     ):
         self.n_components = n_components
         self.tol = tol
@@ -87,6 +90,7 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):
         self.max_iter = max_iter
         self.n_init = n_init
         self.init_params = init_params
+        self.whiten_init = whiten_init
         self.random_state = random_state
         self.warm_start = warm_start
         self.verbose = verbose
@@ -116,13 +120,25 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):
         xp, _, device = get_namespace_and_device(X, xp=xp)
         n_samples, _ = X.shape
 
+        # Whitening only ever changes which samples a distance-based method
+        # (`"kmeans"`, `"k-means++"`) groups together; the responsibilities
+        # produced below are handed to `self._initialize`, which computes
+        # `weights_`/`means_`/`covariances_` from `X` as given, so whitening
+        # the initialization has no effect on what space the fitted model
+        # lives in. `"random"` and `"random_from_data"` do not use distances
+        # and are unaffected by `whiten_init`.
+        if self.whiten_init and self.init_params in ("kmeans", "k-means++"):
+            X_init = PCA(n_components=X.shape[1], whiten=True).fit_transform(X)
+        else:
+            X_init = X
+
         if self.init_params == "kmeans":
             resp = np.zeros((n_samples, self.n_components), dtype=X.dtype)
             label = (
                 cluster.KMeans(
                     n_clusters=self.n_components, n_init=1, random_state=random_state
                 )
-                .fit(X)
+                .fit(X_init)
                 .labels_
             )
             resp[np.arange(n_samples), label] = 1
@@ -149,7 +165,7 @@ class BaseMixture(DensityMixin, BaseEstimator, metaclass=ABCMeta):
         elif self.init_params == "k-means++":
             resp = np.zeros((n_samples, self.n_components), dtype=X.dtype)
             _, indices = kmeans_plusplus(
-                X,
+                X_init,
                 self.n_components,
                 random_state=random_state,
             )

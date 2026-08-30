@@ -702,6 +702,61 @@ def test_gaussian_mixture_fit_best_params():
         assert_almost_equal(ll.min(), g_best.score(X))
 
 
+def test_whiten_init_recovers_anisotropic_clusters():
+    # Two isotropic blobs separated only along a low-variance axis, then
+    # stretched along the other, uninformative axis: kmeans init on the raw
+    # data cannot tell the classes apart, but whitening first restores a
+    # good initial partition. init_params="kmeans" is deterministic given a
+    # random_state, unlike the randomized "k-means++" seeding, so this is
+    # not run for "k-means++": a single restart of it is not guaranteed to
+    # benefit from a better initial partition the same way.
+    n_samples = 1500
+    random_state = 170
+    X_latent, y = make_blobs(
+        n_samples=n_samples, centers=[[-2, 0], [2, 0]], random_state=random_state
+    )
+    X = np.dot(X_latent, [[0.5, 0], [0, 2]])
+
+    raw = GaussianMixture(
+        n_components=2, init_params="kmeans", random_state=random_state
+    ).fit(X)
+    whitened = GaussianMixture(
+        n_components=2,
+        init_params="kmeans",
+        whiten_init=True,
+        random_state=random_state,
+    ).fit(X)
+
+    assert adjusted_rand_score(y, raw.predict(X)) < 0.1
+    assert adjusted_rand_score(y, whitened.predict(X)) > 0.8
+    # Whitening only changes initialization; both are still fit and scored
+    # on the same raw data, so BIC values stay directly comparable.
+    assert whitened.bic(X) < raw.bic(X)
+
+
+@pytest.mark.parametrize("init_params", ["random", "random_from_data"])
+def test_whiten_init_is_noop_for_non_distance_based_init(init_params):
+    # "random" and "random_from_data" don't use distances, so whiten_init
+    # should not change their result.
+    rng = np.random.RandomState(0)
+    rand_data = RandomData(rng)
+    X = rand_data.X["full"]
+
+    raw = GaussianMixture(
+        n_components=rand_data.n_components,
+        init_params=init_params,
+        random_state=0,
+    ).fit(X)
+    whitened = GaussianMixture(
+        n_components=rand_data.n_components,
+        init_params=init_params,
+        whiten_init=True,
+        random_state=0,
+    ).fit(X)
+
+    assert_almost_equal(raw.means_, whitened.means_)
+
+
 def test_gaussian_mixture_fit_convergence_warning():
     rng = np.random.RandomState(0)
     rand_data = RandomData(rng, scale=1)

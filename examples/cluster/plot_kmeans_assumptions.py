@@ -163,6 +163,68 @@ plt.suptitle("Gaussian mixture clusters").set_y(0.95)
 plt.show()
 
 # %%
+# Anisotropy severe enough to affect GaussianMixture too
+# --------------------------------------------------------
+#
+# :class:`~sklearn.mixture.GaussianMixture` fixes the anisotropic case above
+# by fitting a full covariance per component instead of assuming spherical
+# clusters. But it is still initialized from a k-means-style partition of the
+# raw data, and EM only ever *refines* that starting partition -- it does not
+# search over every possible partition from scratch. If the anisotropy is
+# severe enough, the initial partition can already be so wrong that no amount
+# of iteration recovers the true clusters, even with unconstrained
+# covariances.
+#
+# To see this clearly, we build two anisotropic blobs -- "parallel cigars" --
+# separated along their short axis. Euclidean distance, and any k-means-style
+# initialization built on it, is dominated by the long (high-variance) axis
+# and cannot tell the classes apart.
+
+from sklearn.metrics import adjusted_rand_score
+
+X_cigars, y_cigars = make_blobs(
+    n_samples=n_samples, centers=[[-2, 0], [2, 0]], random_state=random_state
+)
+X_cigars = X_cigars @ [[0.5, 0], [0, 2]]
+
+y_pred_raw = GaussianMixture(n_components=2, random_state=random_state).fit_predict(
+    X_cigars
+)
+ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
+
+# %%
+# The fix is not a different clustering algorithm: it is whitening the data
+# before clustering it, via :class:`~sklearn.mixture.GaussianMixture`'s
+# ``whiten_init`` parameter. Whitening rescales onto the principal axes so
+# that every direction has unit variance, which is exactly what makes the
+# informative direction visible to a k-means-style initialization again; the
+# EM fit itself still runs on the data as given.
+
+y_pred_white = GaussianMixture(
+    n_components=2, whiten_init=True, random_state=random_state
+).fit_predict(X_cigars)
+ari_white = adjusted_rand_score(y_cigars, y_pred_white)
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
+
+ax1.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_raw)
+ax1.set_title(f"GaussianMixture\n(ARI={ari_raw:.2f} against ground truth)")
+ax1.set_xlim(-6, 6)
+ax1.set_ylim(-6, 6)
+
+ax2.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_white)
+ax2.set_title(f"GaussianMixture(whiten_init=True)\n(ARI={ari_white:.2f} against ground truth)")
+
+plt.suptitle("Parallel cigars").set_y(0.98)
+plt.show()
+
+# %%
+# This whitening fix does not scale to high dimensions: the same
+# construction lifted to ``d=30`` (one informative dimension plus 29 pure
+# noise dimensions, positioned so the overall data already has mean 0 and
+# identity covariance) gives ARI :math:`\approx` 0 again.
+
+# %%
 # Final remarks
 # -------------
 #
