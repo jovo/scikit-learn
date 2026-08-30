@@ -174,3 +174,304 @@ plt.title(
 )
 plt.axis("equal")
 plt.show()
+
+# %%
+# When BIC selection itself needs whitened data
+# ------------------------------------------------
+#
+# The grid search above works because the two components are already
+# reasonably separated relative to their own spread. We now repeat the same
+# exercise on data where that is not true: the two classes differ only along
+# a direction with *small* within-class variance, while every other direction
+# is pure noise with *large* variance. Whitening is used only to *initialize*
+# each model -- :class:`~sklearn.cluster.KMeans` is run on whitened data purely to get a
+# cluster assignment, from which starting weights and means are computed on
+# the original, unwhitened data -- and every model, whitened-init or not, is
+# then fit and scored by BIC entirely on the original data.
+#
+# Data generation
+# ~~~~~~~~~~~~~~~~
+#
+# We build two "parallel cigars": isotropic blobs separated only along the
+# x-axis, transformed by a diagonal matrix that compresses that separating
+# axis and stretches the other, uninformative one.
+
+from sklearn.datasets import make_blobs
+
+n_samples_cigars = 1500
+cigars_random_state = 170
+
+X_latent, y_cigars = make_blobs(
+    n_samples=n_samples_cigars,
+    centers=[[-2, 0], [2, 0]],
+    random_state=cigars_random_state,
+)
+cigars_transformation = [[0.5, 0], [0, 2]]
+X_cigars = np.dot(X_latent, cigars_transformation)
+
+
+def set_square_bounds(ax, data, margin=0.08):
+    """Equal x/y limits and a square box, so an elongated shape actually
+    looks elongated instead of being auto-scaled to fill the axes."""
+    limit = np.abs(data).max() * (1 + margin)
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_aspect("equal", adjustable="box")
+
+
+ax = plt.gca()
+plt.scatter(X_cigars[:, 0], X_cigars[:, 1], s=3, c=y_cigars)
+plt.title("Parallel cigars (colored by true label)")
+set_square_bounds(ax, X_cigars)
+plt.show()
+
+# %%
+# Model training and selection
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#
+# As before, we vary the number of components and the type of covariance. We
+# add one more dimension to the grid: whether the initialization comes from
+# k-means on whitened data (via :class:`~sklearn.decomposition.PCA`'s
+# ``whiten=True``) or from :class:`~sklearn.mixture.GaussianMixture`'s own
+# default ``"kmeans"`` initialization on the raw data. To fold this into
+# :class:`~sklearn.model_selection.GridSearchCV` as an ordinary hyperparameter,
+# we wrap it in a small estimator: whitening only ever chooses the starting
+# cluster assignment, the EM fit itself -- and every score, including
+# ``bic`` -- always runs on the data as given, so whitened and non-whitened
+# candidates stay directly comparable.
+
+from matplotlib.lines import Line2D
+
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+
+
+class WhitenInitGaussianMixture(GaussianMixture):
+    """GaussianMixture, optionally initialized from k-means on whitened data."""
+
+    def __init__(self, whiten_init=False, **kwargs):
+        self.whiten_init = whiten_init
+        super().__init__(**kwargs)
+
+    @classmethod
+    def _get_param_names(cls):
+        # So GridSearchCV can also set whiten_init, alongside every
+        # GaussianMixture parameter it already knows about.
+        return sorted(GaussianMixture._get_param_names() + ["whiten_init"])
+
+    def fit(self, X, y=None):
+        if self.whiten_init:
+            X_white = PCA(n_components=X.shape[1], whiten=True).fit_transform(X)
+            labels = KMeans(
+                n_clusters=self.n_components,
+                n_init=10,
+                random_state=self.random_state,
+            ).fit_predict(X_white)
+            n = X.shape[0]
+            self.weights_init = (
+                np.bincount(labels, minlength=self.n_components).astype(float) / n
+            )
+            self.means_init = np.array(
+                [
+                    X[labels == k].mean(axis=0) if np.any(labels == k) else X.mean(0)
+                    for k in range(self.n_components)
+                ]
+            )
+            self.n_init = 1
+        return super().fit(X, y)
+
+
+param_grid_cigars = {
+    "n_components": range(1, 7),
+    "covariance_type": ["tied", "diag", "full"],
+    "whiten_init": [False, True],
+}
+# BIC must be scored on the same data a candidate was fit on, not a held-out
+# split, so we bypass GridSearchCV's default cross-validation with a single
+# fold that trains and scores on the full dataset.
+full_data_cv = [(np.arange(len(X_cigars)),) * 2]
+grid_search_cigars = GridSearchCV(
+    WhitenInitGaussianMixture(random_state=cigars_random_state),
+    param_grid=param_grid_cigars,
+    scoring=gmm_bic_score,
+    cv=full_data_cv,
+)
+grid_search_cigars.fit(X_cigars)
+
+# %%
+# Plot the BIC scores
+# ~~~~~~~~~~~~~~~~~~~~~
+#
+# ``spherical`` covariance is dropped from the comparison because its BIC is
+# dominated by model misspecification rather than by initialization and
+# would compress the differences that matter here. For each remaining
+# covariance type, filled points are the default (raw) k-means++
+# initialization and open points use the whitened initialization. Lower is
+# better.
+
+df_cigars = pd.DataFrame(grid_search_cigars.cv_results_)[
+    [
+        "param_n_components",
+        "param_covariance_type",
+        "param_whiten_init",
+        "mean_test_score",
+    ]
+]
+df_cigars["mean_test_score"] = -df_cigars["mean_test_score"]
+df_cigars["Whitened"] = df_cigars["param_whiten_init"].apply(
+    lambda w: "Yes" if w else "No"
+)
+df_cigars = df_cigars.rename(
+    columns={
+        "param_n_components": "Number of components",
+        "param_covariance_type": "Type of covariance",
+        "mean_test_score": "BIC score",
+    }
+)
+df_cigars.sort_values(by="BIC score").head()
+
+# %%
+cov_types_cigars = ["tied", "diag", "full"]
+palette_cigars = sns.color_palette("tab10", len(cov_types_cigars))
+color_map_cigars = dict(zip(cov_types_cigars, palette_cigars))
+offsets_cigars = {cov: (i - 1) * 0.12 for i, cov in enumerate(cov_types_cigars)}
+
+fig, ax = plt.subplots(figsize=(7, 4.5))
+for cov in cov_types_cigars:
+    subset = df_cigars[df_cigars["Type of covariance"] == cov]
+    not_whitened = subset[subset["Whitened"] == "No"].sort_values(
+        "Number of components"
+    )
+    whitened = subset[subset["Whitened"] == "Yes"].sort_values("Number of components")
+    ax.scatter(
+        not_whitened["Number of components"] + offsets_cigars[cov],
+        not_whitened["BIC score"],
+        color=color_map_cigars[cov],
+        s=55,
+        zorder=3,
+    )
+    ax.scatter(
+        whitened["Number of components"] + offsets_cigars[cov],
+        whitened["BIC score"],
+        facecolors="none",
+        edgecolors=color_map_cigars[cov],
+        linewidths=1.8,
+        s=55,
+        zorder=3,
+    )
+
+color_handles_cigars = [
+    Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor=color_map_cigars[c],
+        markersize=8,
+        label=c,
+    )
+    for c in cov_types_cigars
+]
+fill_handles_cigars = [
+    Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor="gray",
+        markersize=8,
+        label="Not whitened",
+    ),
+    Line2D(
+        [0],
+        [0],
+        marker="o",
+        color="w",
+        markerfacecolor="none",
+        markeredgecolor="gray",
+        markersize=8,
+        label="Whitened",
+    ),
+]
+leg1_cigars = ax.legend(
+    handles=color_handles_cigars,
+    title="Type of covariance",
+    loc="center left",
+    bbox_to_anchor=(1.02, 0.7),
+    frameon=False,
+)
+ax.add_artist(leg1_cigars)
+ax.legend(
+    handles=fill_handles_cigars,
+    loc="center left",
+    bbox_to_anchor=(1.02, 0.25),
+    frameon=False,
+)
+ax.set_xticks(list(param_grid_cigars["n_components"]))
+ax.set_xlabel("Number of components")
+ax.set_ylabel("BIC score (lower is better)")
+fig.tight_layout()
+plt.show()
+
+# %%
+# Every whitened-init candidate scores better than its non-whitened
+# counterpart at the same number of components and covariance type. BIC
+# selects a whitened-init, 2-component, tied-covariance model as the best of
+# all candidates -- the correct answer -- while the best non-whitened-init
+# model settles for the wrong number of components.
+#
+# Plot the best model
+# ~~~~~~~~~~~~~~~~~~~~~
+#
+# As before, we plot an ellipse for each component of the selected model, in
+# the (raw) data space every candidate was actually fit and scored on. The
+# best estimator here is our ``WhitenInitGaussianMixture``, already refit on
+# the full data by :class:`~sklearn.model_selection.GridSearchCV`.
+
+best_gmm_cigars = grid_search_cigars.best_estimator_
+
+color_iter_cigars = sns.color_palette("tab10", 2)[::-1]
+Y_cigars = best_gmm_cigars.predict(X_cigars)
+
+# "tied" covariance is a single (n_features, n_features) matrix shared across
+# components rather than one per component; repeat it so the loop below can
+# treat every covariance_type the same way.
+if best_gmm_cigars.covariance_type == "tied":
+    covariances_cigars = [best_gmm_cigars.covariances_] * best_gmm_cigars.n_components
+else:
+    covariances_cigars = best_gmm_cigars.covariances_
+
+fig, ax = plt.subplots()
+
+for i, (mean, cov, color) in enumerate(
+    zip(
+        best_gmm_cigars.means_,
+        covariances_cigars,
+        color_iter_cigars,
+    )
+):
+    v, w = linalg.eigh(cov)
+    if not np.any(Y_cigars == i):
+        continue
+    plt.scatter(
+        X_cigars[Y_cigars == i, 0],
+        X_cigars[Y_cigars == i, 1],
+        0.8,
+        color=color,
+    )
+
+    angle = np.arctan2(w[0][1], w[0][0])
+    angle = 180.0 * angle / np.pi
+    v = 2.0 * np.sqrt(2.0) * np.sqrt(v)
+    ellipse = Ellipse(mean, v[0], v[1], angle=180.0 + angle, color=color)
+    ellipse.set_clip_box(fig.bbox)
+    ellipse.set_alpha(0.5)
+    ax.add_artist(ellipse)
+
+plt.title(
+    f"Selected GMM: {grid_search_cigars.best_params_['covariance_type']} model, "
+    f"{grid_search_cigars.best_params_['n_components']} components, "
+    f"whitened init={grid_search_cigars.best_params_['whiten_init']}"
+)
+set_square_bounds(ax, X_cigars)
+plt.show()
