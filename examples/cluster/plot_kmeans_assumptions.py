@@ -175,12 +175,10 @@ plt.show()
 # of iteration recovers the true clusters, even with unconstrained
 # covariances.
 #
-# To see this clearly, we build two isotropic blobs separated only along the
-# x-axis, then apply a diagonal ``transformation`` that compresses that
-# separating axis and stretches the other, uninformative one -- two
-# elongated, parallel clusters. Euclidean distance, and any k-means-style
-# initialization built on it, is dominated by the high-variance direction and
-# cannot tell the classes apart.
+# To see this clearly, we build two anisotropic blobs -- "parallel cigars" --
+# separated along their short axis. Euclidean distance, and any k-means-style
+# initialization built on it, is dominated by the long (high-variance) axis
+# and cannot tell the classes apart.
 
 from sklearn.metrics import adjusted_rand_score
 
@@ -206,20 +204,11 @@ plt.show()
 # Whitening rescales onto the principal axes so that every direction has unit
 # variance, which is exactly what makes the informative direction visible to
 # a k-means-style initialization again.
-#
-# PCA orders its output columns by variance in the *original* data,
-# descending -- here that puts the high-variance uninformative direction
-# first, the reverse of ``X_cigars``'s column order. We undo that reordering
-# below purely so the plot below can share the same axes as the one above;
-# it makes no difference to the clustering itself.
 
 from sklearn.decomposition import PCA
 
 X_cigars_white = PCA(n_components=2, whiten=True).fit_transform(X_cigars)
-corr = np.corrcoef(X_cigars.T, X_cigars_white.T)[:2, 2:]
-column_order = np.argmax(np.abs(corr), axis=1)
-signs = np.sign(corr[np.arange(2), column_order])
-X_cigars_white = X_cigars_white[:, column_order] * signs
+X_cigars_white = X_cigars_white[:, ::-1]
 
 y_pred = GaussianMixture(n_components=2, random_state=random_state).fit_predict(
     X_cigars_white
