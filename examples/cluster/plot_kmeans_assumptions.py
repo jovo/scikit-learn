@@ -193,8 +193,11 @@ X_cigars = np.dot(X_latent, cigars_transformation)
 y_pred = GaussianMixture(n_components=2, random_state=random_state).fit_predict(X_cigars)
 ari = adjusted_rand_score(y_cigars, y_pred)
 
+axis_limits = (-6, 6)
 plt.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred)
 plt.title(f"GaussianMixture on parallel cigars\n(ARI={ari:.2f} against ground truth)")
+plt.xlim(axis_limits)
+plt.ylim(axis_limits)
 plt.show()
 
 # %%
@@ -203,10 +206,20 @@ plt.show()
 # Whitening rescales onto the principal axes so that every direction has unit
 # variance, which is exactly what makes the informative direction visible to
 # a k-means-style initialization again.
+#
+# PCA orders its output columns by variance in the *original* data,
+# descending -- here that puts the high-variance uninformative direction
+# first, the reverse of ``X_cigars``'s column order. We undo that reordering
+# below purely so the plot below can share the same axes as the one above;
+# it makes no difference to the clustering itself.
 
 from sklearn.decomposition import PCA
 
 X_cigars_white = PCA(n_components=2, whiten=True).fit_transform(X_cigars)
+corr = np.corrcoef(X_cigars.T, X_cigars_white.T)[:2, 2:]
+column_order = np.argmax(np.abs(corr), axis=1)
+signs = np.sign(corr[np.arange(2), column_order])
+X_cigars_white = X_cigars_white[:, column_order] * signs
 
 y_pred = GaussianMixture(n_components=2, random_state=random_state).fit_predict(
     X_cigars_white
@@ -215,6 +228,8 @@ ari = adjusted_rand_score(y_cigars, y_pred)
 
 plt.scatter(X_cigars_white[:, 0], X_cigars_white[:, 1], c=y_pred)
 plt.title(f"GaussianMixture on whitened data\n(ARI={ari:.2f} against ground truth)")
+plt.xlim(axis_limits)
+plt.ylim(axis_limits)
 plt.show()
 
 # %%
