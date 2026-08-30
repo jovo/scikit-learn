@@ -200,23 +200,24 @@ plt.show()
 
 # %%
 # The fix is not a different clustering algorithm: it is whitening the data
-# first, with :class:`~sklearn.decomposition.PCA`'s ``whiten=True`` option.
-# Whitening rescales onto the principal axes so that every direction has unit
-# variance, which is exactly what makes the informative direction visible to
-# a k-means-style initialization again.
+# first, with :class:`~sklearn.decomposition.PCA`'s ``whiten=True`` option,
+# composed with :class:`~sklearn.pipeline.Pipeline`. Whitening rescales onto
+# the principal axes so that every direction has unit variance, which is
+# exactly what makes the informative direction visible to a k-means-style
+# initialization again.
 
 from sklearn.decomposition import PCA
+from sklearn.pipeline import make_pipeline
 
-X_cigars_white = PCA(n_components=2, whiten=True).fit_transform(X_cigars)
-X_cigars_white = X_cigars_white[:, ::-1]
-
-y_pred = GaussianMixture(n_components=2, random_state=random_state).fit_predict(
-    X_cigars_white
+whitened_gmm = make_pipeline(
+    PCA(n_components=2, whiten=True),
+    GaussianMixture(n_components=2, random_state=random_state),
 )
+y_pred = whitened_gmm.fit_predict(X_cigars)
 ari = adjusted_rand_score(y_cigars, y_pred)
 
-plt.scatter(X_cigars_white[:, 0], X_cigars_white[:, 1], c=y_pred)
-plt.title(f"GaussianMixture on whitened data\n(ARI={ari:.2f} against ground truth)")
+plt.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred)
+plt.title(f"Pipeline(PCA(whiten=True), GaussianMixture)\n(ARI={ari:.2f} against ground truth)")
 plt.xlim(axis_limits)
 plt.ylim(axis_limits)
 plt.show()
