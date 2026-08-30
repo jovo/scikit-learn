@@ -187,7 +187,7 @@ from sklearn.metrics import adjusted_rand_score
 X_latent, y_cigars = make_blobs(
     n_samples=n_samples, centers=[[-2, 0], [2, 0]], random_state=random_state
 )
-cigars_transformation = [[0.1, 0], [0, 8]]
+cigars_transformation = [[0.5, 0], [0, 2]]
 X_cigars = np.dot(X_latent, cigars_transformation)
 
 y_pred = GaussianMixture(n_components=2, random_state=random_state).fit_predict(X_cigars)
