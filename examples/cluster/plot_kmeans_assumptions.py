@@ -205,11 +205,11 @@ ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
 # (for example by composing ``PCA(whiten=True)`` and ``GaussianMixture`` in a
 # :class:`~sklearn.pipeline.Pipeline`). That gives the same clustering, but
 # the fitted model then lives in the whitened, PCA-rotated coordinate space:
-# its ``means_`` and ``covariances_`` are not in the original feature units,
-# and using it on new data means remembering to whiten that data the same way
-# first. Whitening only the initialization avoids this: the model returned
-# below is an ordinary ``GaussianMixture`` already in the original units,
-# usable the normal way.
+# its ``means_`` and ``covariances_`` are not in the original feature units.
+# Using that model on new data means remembering to whiten the new data the
+# same way first, or the predictions will be silently wrong. Whitening only
+# the initialization avoids this: the model returned below is an ordinary
+# ``GaussianMixture`` already in the original units, usable the normal way.
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
