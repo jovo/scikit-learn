@@ -163,6 +163,94 @@ plt.suptitle("Gaussian mixture clusters").set_y(0.95)
 plt.show()
 
 # %%
+# Anisotropy severe enough to affect GaussianMixture too
+# --------------------------------------------------------
+#
+# :class:`~sklearn.mixture.GaussianMixture` fixes the anisotropic case above
+# by fitting a full covariance per component instead of assuming spherical
+# clusters. But it is still initialized from a k-means-style partition of the
+# raw data, and EM only ever *refines* that starting partition -- it does not
+# search over every possible partition from scratch. If the anisotropy is
+# severe enough, the initial partition can already be so wrong that no amount
+# of iteration recovers the true clusters, even with unconstrained
+# covariances.
+#
+# To see this clearly, we build two anisotropic blobs -- "parallel cigars" --
+# separated along their short axis. Euclidean distance, and any k-means-style
+# initialization built on it, is dominated by the long (high-variance) axis
+# and cannot tell the classes apart.
+
+from sklearn.metrics import adjusted_rand_score
+
+X_cigars, y_cigars = make_blobs(
+    n_samples=n_samples, centers=[[-2, 0], [2, 0]], random_state=random_state
+)
+X_cigars = X_cigars @ [[0.5, 0], [0, 2]]
+
+y_pred_raw = GaussianMixture(n_components=2, random_state=random_state).fit_predict(
+    X_cigars
+)
+ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
+
+# %%
+# The fix is not a different clustering algorithm: it is whitening the data
+# only to find a better initial partition. :class:`~sklearn.cluster.KMeans`
+# is run on data whitened by :class:`~sklearn.decomposition.PCA`'s
+# ``whiten=True`` option purely to get a cluster assignment; the starting
+# weights, means, and covariances for :class:`~sklearn.mixture.GaussianMixture`
+# are then estimated from that assignment on the *original*, unwhitened data,
+# and the model is fit entirely on the original data too.
+#
+# An alternative is to fit ``GaussianMixture`` directly on the whitened data
+# (for example by composing ``PCA(whiten=True)`` and ``GaussianMixture`` in a
+# :class:`~sklearn.pipeline.Pipeline`). That gives the same clustering, but
+# the fitted model then lives in the whitened, PCA-rotated coordinate space:
+# its ``means_`` and ``covariances_`` are not in the original feature units.
+# Using that model on new data means remembering to whiten the new data the
+# same way first, or the predictions will be silently wrong. Whitening only
+# the initialization avoids this: the model returned below is an ordinary
+# ``GaussianMixture`` already in the original units, usable the normal way.
+# ``GaussianMixture`` has no built-in way to turn hard cluster labels into
+# ``weights_init``/``means_init``/``precisions_init``, so that step -- one
+# :class:`~sklearn.covariance.OAS` fit per cluster -- is done by hand below.
+
+from sklearn.cluster import KMeans
+from sklearn.covariance import OAS
+from sklearn.decomposition import PCA
+
+X_cigars_white = PCA(n_components=None, whiten=True).fit_transform(X_cigars)
+labels = KMeans(n_clusters=2, random_state=random_state).fit_predict(X_cigars_white)
+
+gmm = GaussianMixture(
+    n_components=2,
+    weights_init=[(labels == i).mean() for i in range(2)],
+    means_init=[X_cigars[labels == i].mean(axis=0) for i in range(2)],
+    precisions_init=[OAS().fit(X_cigars[labels == i]).precision_ for i in range(2)],
+    random_state=random_state,
+).fit(X_cigars)
+y_pred_white = gmm.predict(X_cigars)
+ari_white = adjusted_rand_score(y_cigars, y_pred_white)
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
+
+ax1.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_raw)
+ax1.set_title(f"GaussianMixture\n(ARI={ari_raw:.2f} against ground truth)")
+ax1.set_xlim(-6, 6)
+ax1.set_ylim(-6, 6)
+
+ax2.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_white)
+ax2.set_title(f"GaussianMixture, whitened init\n(ARI={ari_white:.2f} against ground truth)")
+
+plt.suptitle("Parallel cigars").set_y(0.98)
+plt.show()
+
+# %%
+# This whitening fix does not scale to high dimensions: the same
+# construction lifted to ``d=30`` (one informative dimension plus 29 pure
+# noise dimensions, positioned so the overall data already has mean 0 and
+# identity covariance) gives ARI :math:`\approx` 0 again.
+
+# %%
 # Final remarks
 # -------------
 #
