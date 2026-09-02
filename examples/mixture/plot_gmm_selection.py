@@ -239,11 +239,60 @@ plt.show()
 # cluster assignment, the EM fit itself -- and every score, including
 # ``bic`` -- always runs on the data as given, so whitened and non-whitened
 # candidates stay directly comparable.
+#
+# There are two ways to use whitening here, and they are easy to conflate:
+#
+# 1. Whiten only to *initialize*: run k-means on whitened data to get a
+#    cluster assignment, derive starting weights/means/covariances from that
+#    assignment on the *original* data, then fit and score entirely on the
+#    original data. This is what we do below.
+# 2. Whiten the data itself: fit and score ``GaussianMixture`` entirely on
+#    whitened data, then map the fitted parameters back before comparing
+#    BIC across models.
+#
+# The two give numerically identical BIC values and model selection (whitening
+# is an invertible linear reparametrization, so this is expected, not a
+# coincidence). Option 1 is simpler to get right: option 2's BIC is only
+# comparable across models after correcting for the whitening transform's
+# Jacobian, and it is easy to instead score the fitted model directly on
+# whitened data by mistake, which silently shifts every BIC by the same
+# offset without changing which model looks best in isolation -- a mistake
+# that is invisible unless compared against a non-whitened candidate.
+#
+# One more detail worth being explicit about: passing ``means_init`` and
+# ``weights_init`` without also passing ``precisions_init`` does not fully
+# use the informed initialization. Internally, :class:`~sklearn.mixture.GaussianMixture`
+# still runs its own default (uninformed) ``"kmeans"`` step on the raw data
+# to seed covariances whenever *any* of the three ``*_init`` arguments is
+# left as ``None`` -- so all three are computed below, from the same
+# whitened-space partition, to avoid silently mixing an informed mean with
+# an uninformed covariance.
 
 from matplotlib.lines import Line2D
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+
+
+def _precisions_from_labels(X, labels, n_components, covariance_type, reg_covar=1e-6):
+    """Precisions in the shape GaussianMixture's ``precisions_init`` expects,
+    estimated per-cluster from a hard partition."""
+    n_features = X.shape[1]
+    covariances = np.empty((n_components, n_features, n_features))
+    for k in range(n_components):
+        Xk = X[labels == k]
+        cov = np.cov(Xk, rowvar=False) if len(Xk) > 1 else np.eye(n_features)
+        cov = np.atleast_2d(cov) + reg_covar * np.eye(n_features)
+        covariances[k] = cov
+
+    if covariance_type == "full":
+        return np.array([np.linalg.inv(c) for c in covariances])
+    if covariance_type == "tied":
+        pooled = covariances.mean(axis=0)
+        return np.linalg.inv(pooled)
+    if covariance_type == "diag":
+        return 1.0 / np.array([np.diag(c) for c in covariances])
+    raise NotImplementedError(covariance_type)
 
 
 class WhitenInitGaussianMixture(GaussianMixture):
@@ -276,6 +325,9 @@ class WhitenInitGaussianMixture(GaussianMixture):
                     X[labels == k].mean(axis=0) if np.any(labels == k) else X.mean(0)
                     for k in range(self.n_components)
                 ]
+            )
+            self.precisions_init = _precisions_from_labels(
+                X, labels, self.n_components, self.covariance_type
             )
             self.n_init = 1
         return super().fit(X, y)
