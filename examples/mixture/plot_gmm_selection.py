@@ -240,24 +240,11 @@ plt.show()
 # ``bic`` -- always runs on the data as given, so whitened and non-whitened
 # candidates stay directly comparable.
 #
-# There are two ways to use whitening here, and they are easy to conflate:
-#
-# 1. Whiten only to *initialize*: run k-means on whitened data to get a
-#    cluster assignment, derive starting weights/means/covariances from that
-#    assignment on the *original* data, then fit and score entirely on the
-#    original data. This is what we do below.
-# 2. Whiten the data itself: fit and score ``GaussianMixture`` entirely on
-#    whitened data, then map the fitted parameters back before comparing
-#    BIC across models.
-#
-# The two give numerically identical BIC values and model selection (whitening
-# is an invertible linear reparametrization, so this is expected, not a
-# coincidence). Option 1 is simpler to get right: option 2's BIC is only
-# comparable across models after correcting for the whitening transform's
-# Jacobian, and it is easy to instead score the fitted model directly on
-# whitened data by mistake, which silently shifts every BIC by the same
-# offset without changing which model looks best in isolation -- a mistake
-# that is invisible unless compared against a non-whitened candidate.
+# Whitening is used only to *initialize*: k-means runs on whitened data to
+# get a cluster assignment, starting weights/means/covariances are derived
+# from that assignment on the *original* data, and the model is fit and
+# scored entirely on the original data. This keeps every BIC directly
+# comparable, whitened or not, with no Jacobian correction to get right.
 #
 # One more detail worth being explicit about: passing ``means_init`` and
 # ``weights_init`` without also passing ``precisions_init`` does not fully
