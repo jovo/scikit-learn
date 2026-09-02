@@ -246,15 +246,10 @@ plt.show()
 # scored entirely on the original data. This keeps every BIC directly
 # comparable, whitened or not, with no Jacobian correction to get right.
 #
-# One more detail worth being explicit about: passing ``means_init`` and
-# ``weights_init`` without also passing ``precisions_init`` does not fully
-# use the informed initialization. Internally, :class:`~sklearn.mixture.GaussianMixture`
-# still runs its own default (uninformed) ``"kmeans"`` step on the raw data
-# to seed covariances whenever *any* of the three ``*_init`` arguments is
-# left as ``None`` -- so all three are computed below, from the same
-# whitened-space partition. Per-cluster precisions use
-# :class:`~sklearn.covariance.OAS`, a shrinkage estimator that converges
-# faster than plain sample-covariance estimation for small clusters.
+# All three -- ``weights_init``, ``means_init``, and ``precisions_init`` --
+# are passed in below, computed from the whitened-space partition. Per-cluster
+# precisions use :class:`~sklearn.covariance.OAS`, a shrinkage estimator that
+# converges faster than plain sample-covariance estimation for small clusters.
 
 from matplotlib.lines import Line2D
 
