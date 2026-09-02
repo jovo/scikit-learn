@@ -261,23 +261,19 @@ from sklearn.decomposition import PCA
 def _precisions_from_labels(X, labels, n_components, covariance_type):
     """Precisions in the shape GaussianMixture's ``precisions_init`` expects,
     estimated per-cluster from a hard partition using OAS shrinkage."""
-    n_features = X.shape[1]
-    covariances = np.array(
-        [
-            OAS().fit(X[labels == k]).covariance_
-            if np.sum(labels == k) > 1
-            else np.eye(n_features)
-            for k in range(n_components)
-        ]
-    )
-
     if covariance_type == "full":
-        return np.array([np.linalg.inv(c) for c in covariances])
+        return np.array(
+            [OAS().fit(X[labels == k]).precision_ for k in range(n_components)]
+        )
     if covariance_type == "tied":
-        pooled = covariances.mean(axis=0)
-        return np.linalg.inv(pooled)
+        pooled = np.concatenate(
+            [X[labels == k] - X[labels == k].mean(axis=0) for k in range(n_components)]
+        )
+        return OAS().fit(pooled).precision_
     if covariance_type == "diag":
-        return 1.0 / np.array([np.diag(c) for c in covariances])
+        return np.array(
+            [1.0 / (X[labels == k].var(axis=0) + 1e-6) for k in range(n_components)]
+        )
     raise NotImplementedError(covariance_type)
 
 
