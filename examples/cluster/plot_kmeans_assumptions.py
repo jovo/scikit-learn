@@ -194,20 +194,44 @@ ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
 
 # %%
 # The fix is not a different clustering algorithm: it is whitening the data
-# first, with :class:`~sklearn.decomposition.PCA`'s ``whiten=True`` option,
-# composed with :class:`~sklearn.pipeline.Pipeline`. Whitening rescales onto
-# the principal axes so that every direction has unit variance, which is
-# exactly what makes the informative direction visible to a k-means-style
-# initialization again.
+# only to find a better initial partition. :class:`~sklearn.cluster.KMeans`
+# is run on data whitened by :class:`~sklearn.decomposition.PCA`'s
+# ``whiten=True`` option purely to get a cluster assignment; the starting
+# weights, means, and covariances for :class:`~sklearn.mixture.GaussianMixture`
+# are then estimated from that assignment on the *original*, unwhitened data,
+# and the model is fit entirely on the original data too.
+#
+# An alternative is to fit ``GaussianMixture`` directly on the whitened data
+# (for example by composing ``PCA(whiten=True)`` and ``GaussianMixture`` in a
+# :class:`~sklearn.pipeline.Pipeline`). That gives the same clustering, but
+# the fitted model then lives in the whitened, PCA-rotated coordinate space:
+# its ``means_`` and ``covariances_`` are not in the original feature units,
+# and using it on new data means remembering to whiten that data the same way
+# first. Whitening only the initialization avoids this: the model returned
+# below is an ordinary ``GaussianMixture`` already in the original units,
+# usable the normal way.
 
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.pipeline import make_pipeline
 
-whitened_gmm = make_pipeline(
-    PCA(n_components=2, whiten=True),
-    GaussianMixture(n_components=2, random_state=random_state),
-)
-y_pred_white = whitened_gmm.fit_predict(X_cigars)
+reg_covar = 1e-6  # matches GaussianMixture's own default
+n_features = X_cigars.shape[1]
+X_cigars_white = PCA(n_components=None, whiten=True).fit_transform(X_cigars)
+labels = KMeans(n_clusters=2, random_state=random_state).fit_predict(X_cigars_white)
+
+gmm = GaussianMixture(
+    n_components=2,
+    weights_init=[(labels == i).mean() for i in range(2)],
+    means_init=[X_cigars[labels == i].mean(axis=0) for i in range(2)],
+    precisions_init=[
+        np.linalg.inv(
+            np.cov(X_cigars[labels == i], rowvar=False) + reg_covar * np.eye(n_features)
+        )
+        for i in range(2)
+    ],
+    random_state=random_state,
+).fit(X_cigars)
+y_pred_white = gmm.predict(X_cigars)
 ari_white = adjusted_rand_score(y_cigars, y_pred_white)
 
 fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12, 6), sharex=True, sharey=True)
@@ -218,7 +242,7 @@ ax1.set_xlim(-6, 6)
 ax1.set_ylim(-6, 6)
 
 ax2.scatter(X_cigars[:, 0], X_cigars[:, 1], c=y_pred_white)
-ax2.set_title(f"Pipeline(PCA(whiten=True), GaussianMixture)\n(ARI={ari_white:.2f} against ground truth)")
+ax2.set_title(f"GaussianMixture, whitened init\n(ARI={ari_white:.2f} against ground truth)")
 
 plt.suptitle("Parallel cigars").set_y(0.98)
 plt.show()
