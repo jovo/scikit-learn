@@ -210,12 +210,14 @@ ari_raw = adjusted_rand_score(y_cigars, y_pred_raw)
 # same way first, or the predictions will be silently wrong. Whitening only
 # the initialization avoids this: the model returned below is an ordinary
 # ``GaussianMixture`` already in the original units, usable the normal way.
+# ``GaussianMixture`` has no built-in way to turn hard cluster labels into
+# ``weights_init``/``means_init``/``precisions_init``, so that step -- one
+# :class:`~sklearn.covariance.OAS` fit per cluster -- is done by hand below.
 
 from sklearn.cluster import KMeans
+from sklearn.covariance import OAS
 from sklearn.decomposition import PCA
 
-reg_covar = 1e-6  # matches GaussianMixture's own default
-n_features = X_cigars.shape[1]
 X_cigars_white = PCA(n_components=None, whiten=True).fit_transform(X_cigars)
 labels = KMeans(n_clusters=2, random_state=random_state).fit_predict(X_cigars_white)
 
@@ -223,12 +225,7 @@ gmm = GaussianMixture(
     n_components=2,
     weights_init=[(labels == i).mean() for i in range(2)],
     means_init=[X_cigars[labels == i].mean(axis=0) for i in range(2)],
-    precisions_init=[
-        np.linalg.inv(
-            np.cov(X_cigars[labels == i], rowvar=False) + reg_covar * np.eye(n_features)
-        )
-        for i in range(2)
-    ],
+    precisions_init=[OAS().fit(X_cigars[labels == i]).precision_ for i in range(2)],
     random_state=random_state,
 ).fit(X_cigars)
 y_pred_white = gmm.predict(X_cigars)
