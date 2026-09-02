@@ -265,25 +265,29 @@ plt.show()
 # still runs its own default (uninformed) ``"kmeans"`` step on the raw data
 # to seed covariances whenever *any* of the three ``*_init`` arguments is
 # left as ``None`` -- so all three are computed below, from the same
-# whitened-space partition, to avoid silently mixing an informed mean with
-# an uninformed covariance.
+# whitened-space partition. Per-cluster precisions use
+# :class:`~sklearn.covariance.OAS`, a shrinkage estimator that converges
+# faster than plain sample-covariance estimation for small clusters.
 
 from matplotlib.lines import Line2D
 
 from sklearn.cluster import KMeans
+from sklearn.covariance import OAS
 from sklearn.decomposition import PCA
 
 
-def _precisions_from_labels(X, labels, n_components, covariance_type, reg_covar=1e-6):
+def _precisions_from_labels(X, labels, n_components, covariance_type):
     """Precisions in the shape GaussianMixture's ``precisions_init`` expects,
-    estimated per-cluster from a hard partition."""
+    estimated per-cluster from a hard partition using OAS shrinkage."""
     n_features = X.shape[1]
-    covariances = np.empty((n_components, n_features, n_features))
-    for k in range(n_components):
-        Xk = X[labels == k]
-        cov = np.cov(Xk, rowvar=False) if len(Xk) > 1 else np.eye(n_features)
-        cov = np.atleast_2d(cov) + reg_covar * np.eye(n_features)
-        covariances[k] = cov
+    covariances = np.array(
+        [
+            OAS().fit(X[labels == k]).covariance_
+            if np.sum(labels == k) > 1
+            else np.eye(n_features)
+            for k in range(n_components)
+        ]
+    )
 
     if covariance_type == "full":
         return np.array([np.linalg.inv(c) for c in covariances])
